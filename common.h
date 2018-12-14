@@ -63,6 +63,13 @@ struct ScatterList
 	int length;                //数据存放区域的长度
 };
 
+/* structure to exchange data which is needed to connect the QPs */
+struct cm_con_data_t {
+	uint32_t 			qp_num;		/* QP number */
+	uint16_t 			lid;		/* LID of the IB port */
+	uint8_t     		remoteGid[16];  /* GID  */
+};
+
 struct connection
 {
 	struct ibv_context *ctx;
@@ -70,6 +77,8 @@ struct connection
 	struct ibv_cq **cq_data, **cq_ctrl, **cq_mem;
 	struct ibv_comp_channel *comp_channel, *mem_channel;
 	struct ibv_port_attr		port_attr;	
+	int gidIndex;
+	union ibv_gid gid;
 };
 
 struct memory_management
@@ -151,11 +160,12 @@ extern int scatter_pool_size;
 extern int ScatterList_pool_size;
 extern int request_pool_size;
 
+int resources_create(char* ip_address);
 int on_connect_request(struct rdma_cm_id *id, int tid);
 int on_connection(struct rdma_cm_id *id, int tid);
 int on_addr_resolved(struct rdma_cm_id *id, int tid);
 int on_route_resolved(struct rdma_cm_id *id, int tid);
-void build_connection(struct rdma_cm_id *id, int tid);
+void build_connection(int tid);
 void build_context(struct ibv_context *verbs);
 void build_params(struct rdma_conn_param *params);
 void register_memory( int tid );

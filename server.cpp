@@ -18,20 +18,20 @@ void (*commit)( struct request_backup *request );
 void notify( struct request_backup *request );
 void *memory_ctrl_backup();
 
-int on_event(struct rdma_cm_event *event, int tid)
-{
-	int r = 0;
-	if (event->event == RDMA_CM_EVENT_CONNECT_REQUEST)
-	  r = on_connect_request(event->id, tid);
-	else if (event->event == RDMA_CM_EVENT_ESTABLISHED)
-	  r = on_connection(event->id, tid);
-	// else if (event->event == RDMA_CM_EVENT_DISCONNECTED)
-	  // r = on_disconnect(event->id);
-	else
-	  die("on_event: unknown event.");
+// int on_event(struct rdma_cm_event *event, int tid)
+// {
+	// int r = 0;
+	// if (event->event == RDMA_CM_EVENT_CONNECT_REQUEST)
+	  // r = on_connect_request(event->id, tid);
+	// else if (event->event == RDMA_CM_EVENT_ESTABLISHED)
+	  // r = on_connection(event->id, tid);
+	// // else if (event->event == RDMA_CM_EVENT_DISCONNECTED)
+	  // // r = on_disconnect(event->id);
+	// else
+	  // die("on_event: unknown event.");
 
-	return r;
-}
+	// return r;
+// }
 
 void initialize_backup( void (*f)(struct request_backup *request), void *address, int length )
 {
@@ -49,39 +49,8 @@ void initialize_backup( void (*f)(struct request_backup *request), void *address
 	
 	struct ibv_wc wc;
 	int i = 0, j;
-	for( i = 0; i < connect_number; i ++ ){
-		TEST_Z(ec = rdma_create_event_channel());
-		TEST_NZ(rdma_create_id(ec, &listener[i], NULL, RDMA_PS_TCP));
-		TEST_NZ(rdma_bind_addr(listener[i], (struct sockaddr *)&addr));
-		TEST_NZ(rdma_listen(listener[i], 10)); /* backlog=10 is arbitrary */
-		port = ntohs(rdma_get_src_port(listener[i]));
-		fprintf(stderr, "port#%d: %d\n", i, port);
-		if( i == 0 ){
-			printf("listening on port %d.\n", port);
-			memset(&addr, 0, sizeof(addr));
-			addr.sin6_family = AF_INET6;
-		}
-		else{
-			memcpy( memgt->send_buffer, &port, sizeof(int) );
-			//fprintf(stderr, "port#%d: %d\n", i, *((int *)memgt->send_buffer));
-			if(1){
-				post_send( 0, port, 0, sizeof(int), 0 );
-				int tmp = get_wc( &wc );
-			}
-			printf("post send ok\n");
-		}
-		
-		while (rdma_get_cm_event(ec, &event) == 0) {
-			struct rdma_cm_event event_copy;
-			memcpy(&event_copy, event, sizeof(*event));
-			rdma_ack_cm_event(event);
-			if (on_event(&event_copy, i)){
-				break;
-			}
-		}
-		fprintf(stderr, "build connect succeed %d\n", i);
-		
-	}
+	resources_create( NULL );
+	
 	memcpy( memgt->send_buffer, memgt->rdma_recv_mr, sizeof(struct ibv_mr) );
 	if(1){
 		post_send( 0, 50, 0, sizeof(struct ibv_mr), 0 );

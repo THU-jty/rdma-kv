@@ -31,23 +31,23 @@ int clean_send_buffer( struct package_active *now );
 int clean_package( struct package_active *now );
 void *memory_ctrl_active();
 
-int on_event(struct rdma_cm_event *event, int tid)
-{
-	int r = 0;
-    //printf("on event %d\n", event->event);
-	if (event->event == RDMA_CM_EVENT_ADDR_RESOLVED)
-        r = on_addr_resolved(event->id, tid);
-    else if (event->event == RDMA_CM_EVENT_ROUTE_RESOLVED)
-      r = on_route_resolved(event->id, tid);
-    else if (event->event == RDMA_CM_EVENT_ESTABLISHED)
-      r = on_connection(event->id, tid);
-	// else if (event->event == RDMA_CM_EVENT_DISCONNECTED)
-	  // r = on_disconnect(event->id);
-	else
-	  die("on_event: unknown event.");
+// int on_event(struct rdma_cm_event *event, int tid)
+// {
+	// int r = 0;
+    // //printf("on event %d\n", event->event);
+	// if (event->event == RDMA_CM_EVENT_ADDR_RESOLVED)
+        // r = on_addr_resolved(event->id, tid);
+    // else if (event->event == RDMA_CM_EVENT_ROUTE_RESOLVED)
+      // r = on_route_resolved(event->id, tid);
+    // else if (event->event == RDMA_CM_EVENT_ESTABLISHED)
+      // r = on_connection(event->id, tid);
+	// // else if (event->event == RDMA_CM_EVENT_DISCONNECTED)
+	  // // r = on_disconnect(event->id);
+	// else
+	  // die("on_event: unknown event.");
 
-	return r;
-}
+	// return r;
+// }
 
 void initialize_active( void *address, int length, char *ip_address )
 {
@@ -61,38 +61,7 @@ void initialize_active( void *address, int length, char *ip_address )
 	/*建立连接，数量为connect_number，\
 	每次通过第0条链路传输port及ibv_mr，第0条链路端口固定为bind_port*/
 	struct ibv_wc wc;
-	for( int i = 0; i < connect_number; i ++ ){
-		if( i == 0 ){
-			char port[20];
-			sprintf(port, "%d\0", bind_port);
-			TEST_NZ(rdma_getaddrinfo(ip_address, port, NULL, &addr));
-		}
-		else{
-			if(1){
-				post_recv( 0, i, 0, sizeof(int));
-				int tmp = get_wc( &wc );
-			}
-			
-			char port[20];
-			fprintf(stderr, "port: %d\n", *((int *)(memgt->recv_buffer)));
-			int tmp = *((int *)(memgt->recv_buffer));
-			sprintf(port, "%d\0", tmp);
-			TEST_NZ(rdma_getaddrinfo(ip_address, port, NULL, &addr));
-		}
-		TEST_Z(ec = rdma_create_event_channel());
-		TEST_NZ(rdma_create_id(ec, &conn_id[i], NULL, RDMA_PS_TCP));
-		TEST_NZ(rdma_resolve_addr(conn_id[i], NULL, addr->ai_dst_addr, TIMEOUT_IN_MS));
-		rdma_freeaddrinfo(addr);
-		while (rdma_get_cm_event(ec, &event) == 0) {
-			struct rdma_cm_event event_copy;
-			memcpy(&event_copy, event, sizeof(*event));
-			rdma_ack_cm_event(event);
-			if (on_event(&event_copy, i)){
-				break;
-			}
-		}
-		fprintf(stderr, "build connect succeed %d\n", i);
-	}
+	resources_create( ip_address );
 	
 	if(1){
 		post_recv( 0, 20, 0, sizeof(struct ibv_mr));
@@ -160,18 +129,18 @@ redo:
 	
 	struct ibv_cq *cq;
 	struct ibv_wc *wc, *wc_array; 
-	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*105 );
+	wc_array = ( struct ibv_wc * )malloc( sizeof(struct ibv_wc)*6 );
 	int fl = 0;
 	cq = s_ctx->cq_data[0];
 	while(!fl){
-		int num = ibv_poll_cq(cq, 100, wc_array);
+		int num = ibv_poll_cq(cq, 5, wc_array);
 		if( num < 0 ) continue;
 		for( int k = 0; k < num; k ++ ){
 			wc = &wc_array[k];
 			if( wc->opcode == IBV_WC_RDMA_WRITE ){
 				if( wc->status != IBV_WC_SUCCESS ){
 					printf("write error redo now!\n");
-					goto redo;
+					//goto redo;
 				}
 				continue;
 			}
@@ -233,7 +202,7 @@ redo:
 			if( wc->opcode == IBV_WC_RDMA_WRITE ){
 				if( wc->status != IBV_WC_SUCCESS ){
 					printf("write error redo now!\n");
-					goto redo;
+					//goto redo;
 				}
 				continue;
 			}

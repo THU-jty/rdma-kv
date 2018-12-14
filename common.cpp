@@ -1,5 +1,5 @@
 #include "common.h"
-
+#include "sock.h"
 
 struct connection *s_ctx;
 struct memory_management *memgt;
@@ -25,6 +25,7 @@ int concurrency_num = 5;
 int memory_reback_number = 20;
 ull magic_number = 0x0145145145145145;
 int ib_port = 1;
+int ib_gid = 3;
 
 int buffer_per_size;
 
@@ -57,8 +58,10 @@ send buffer: BUFFER_SIZE/buffer_per_size
 
 int sock;
 
-static int resources_create(char *ip_address, )
+int resources_create(char *ip_address)
 {	
+	s_ctx = ( struct connection * )malloc( sizeof( struct connection ) );
+	
 	struct ibv_device       **dev_list = NULL;
 	struct ibv_qp_init_attr qp_init_attr;
 	struct ibv_device 	*ib_dev = NULL;
@@ -67,14 +70,14 @@ static int resources_create(char *ip_address, )
 	int 			mr_flags = 0;
 	int 			cq_size = 0;
 	int 			num_devices;
-	char *dev_name = "mlx5_1";
+	char *dev_name = "mlx5_0";
 	
 	/* if client side */
 	if ( end == 0 ) {
 		sock = sock_client_connect(ip_address, bind_port);
 		if (sock < 0) {
 			fprintf(stderr, "failed to establish TCP connection to server %s, port %d\n", 
-				ip_address bind_port);
+				ip_address, bind_port);
 			return -1;
 		}
 	} else {
@@ -142,64 +145,230 @@ static int resources_create(char *ip_address, )
 		fprintf(stderr, "ibv_query_port on port %u failed\n", ib_port);
 		return 1;
 	}
+	if (ibv_query_gid(s_ctx->ctx, ib_port, ib_gid, &s_ctx->gid)) {
+		fprintf(stderr, "ibv_query_gid on port %u gid %d failed\n", ib_port, ib_gid);
+		return 1;
+	}
+	s_ctx->gidIndex = ib_gid;
+	
+	for( int i = 0; i < connect_number; i ++ ){
+		build_connection( i );
+	}
 
-	/* allocate Protection Domain */
-	s_ctx->pd = ibv_alloc_pd(s_ctx->ctx);
-	if (!s_ctx->pd ) {
-		fprintf(stderr, "ibv_alloc_pd failed\n");
+	return 0;
+}
+
+void fillAhAttr(ibv_ah_attr *attr, uint32_t remoteLid, uint8_t *remoteGid, 
+        struct connection *s_ctx) {
+
+    memset(attr, 0, sizeof(ibv_ah_attr));
+    attr->dlid = remoteLid;
+    attr->sl = 0;
+    attr->src_path_bits = 0;
+    attr->port_num = ib_port;
+
+    //attr->is_global = 0;
+
+    // fill ah_attr with GRH
+    
+    attr->is_global = 1;
+    memcpy(&attr->grh.dgid, remoteGid, 16);
+    attr->grh.flow_label = 0;
+    attr->grh.hop_limit = 1;
+    attr->grh.sgid_index = s_ctx->gidIndex;
+    attr->grh.traffic_class = 0;
+}
+
+
+ int modify_qp_to_init(struct ibv_qp *qp)
+{
+	struct ibv_qp_attr 	attr;
+	int 			flags;
+	int 			rc;
+
+
+	/* do the following QP transition: RESET -> INIT */
+	memset(&attr, 0, sizeof(attr));
+
+	attr.qp_state 	= IBV_QPS_INIT;
+	attr.port_num 	= ib_port;
+	attr.pkey_index = 0;
+
+	/* we don't do any RDMA operation, so remote operation is not permitted */
+	attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE  | IBV_ACCESS_REMOTE_READ  | IBV_ACCESS_REMOTE_ATOMIC ;
+
+	flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
+
+	rc = ibv_modify_qp(qp, &attr, flags);
+	if (rc) {
+		fprintf(stderr, "failed to modify QP state to INIT\n");
+		return rc;
+	}
+
+	return 0;
+}
+
+ int modify_qp_to_rtr(
+	struct 	 ibv_qp *qp,
+	uint32_t remote_qpn,
+	uint16_t dlid,
+	uint8_t *remoteGid)
+{
+	struct ibv_qp_attr 	attr;
+	int 			flags;
+	int 			rc;
+
+	/* do the following QP transition: INIT -> RTR */
+	memset(&attr, 0, sizeof(attr));
+
+	attr.qp_state 			= IBV_QPS_RTR;
+	attr.path_mtu 			= IBV_MTU_256;
+	attr.dest_qp_num 		= remote_qpn;
+	attr.rq_psn 			= 0;
+	attr.max_dest_rd_atomic 	= 1;
+	attr.min_rnr_timer 		= 0x12;
+	
+	fillAhAttr(&attr.ah_attr, dlid, remoteGid, s_ctx);
+
+	flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | 
+		IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+
+	rc = ibv_modify_qp(qp, &attr, flags);
+	if (rc) {
+		fprintf(stderr, "failed to modify QP state to RTR %d \n", rc);
+		printf("%s\n", strerror(rc));
+		return rc;
+	}
+
+	return 0;
+}
+
+ int modify_qp_to_rts(struct ibv_qp *qp)
+{
+	struct ibv_qp_attr 	attr;
+	int 			flags;
+	int 			rc;
+
+
+	/* do the following QP transition: RTR -> RTS */
+	memset(&attr, 0, sizeof(attr));
+
+	attr.qp_state 		= IBV_QPS_RTS;
+	attr.timeout 		= 0x12;
+	attr.retry_cnt 		= 7;
+	attr.rnr_retry 		= 7;
+	attr.sq_psn 		= 0;
+	attr.max_rd_atomic 	= 1;
+
+ 	flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | 
+		IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+
+	rc = ibv_modify_qp(qp, &attr, flags);
+	if (rc) {
+		fprintf(stderr, "failed to modify QP state to RTS\n");
+		return rc;
+	}
+
+	return 0;
+}
+
+void print_GID( uint8_t *a )
+{
+	fprintf(stdout, "GID: 0x");
+	for( int i = 0; i < 16; i ++ ){
+		uchar ch = a[i];
+		fprintf(stdout, "%02x", ch);
+	}
+	fprintf(stdout, "\n");
+}
+
+ int connect_qp(struct ibv_qp *myqp, int id)
+{
+	struct cm_con_data_t 	local_con_data;
+	struct cm_con_data_t 	remote_con_data;
+	struct cm_con_data_t 	tmp_con_data;
+	int 			rc;
+
+
+	/* modify the QP to init */
+	rc = modify_qp_to_init(myqp);
+	if (rc) {
+		fprintf(stderr, "change QP state to INIT failed\n");
+		return rc;
+	}
+
+	//post_recv( id, 0, 0, 100 );
+	/* let the client post RR to be prepared for incoming messages */
+	// if (end == 0) {
+		// rc = post_recv( id, 0, 0, 0 );
+		// if (rc) {
+			// fprintf(stderr, "failed to post RR\n");
+			// return rc;
+		// }
+	// }
+
+	/* exchange using TCP sockets info required to connect QPs */
+	local_con_data.qp_num = myqp->qp_num;
+	local_con_data.lid    = s_ctx->port_attr.lid;
+	memcpy( local_con_data.remoteGid, s_ctx->gid.raw, 16*sizeof(uint8_t) );
+
+	fprintf(stdout, "\nLocal LID        = 0x%x\n", s_ctx->port_attr.lid);
+	fprintf(stdout, "local QP number = 0x%x\n", myqp->qp_num);
+	fprintf(stdout, "local LID       = 0x%x\n", s_ctx->port_attr.lid);
+	print_GID( local_con_data.remoteGid );
+	
+	if (sock_sync_data(sock, (end==0), sizeof(struct cm_con_data_t), &local_con_data, &tmp_con_data) < 0) {
+		fprintf(stderr, "failed to exchange connection data between sides\n");
 		return 1;
 	}
 
-	
+	remote_con_data.qp_num = tmp_con_data.qp_num;
+	remote_con_data.lid    = tmp_con_data.lid;
+	memcpy( remote_con_data.remoteGid, tmp_con_data.remoteGid, 16*sizeof(uint8_t) );
+
+	fprintf(stdout, "Remote QP number = 0x%x\n", remote_con_data.qp_num);
+	fprintf(stdout, "Remote LID       = 0x%x\n", remote_con_data.lid);
+	print_GID( remote_con_data.remoteGid );
+
+	/* modify the QP to RTR */
+	rc = modify_qp_to_rtr(myqp, remote_con_data.qp_num, remote_con_data.lid, remote_con_data.remoteGid);
+	if (rc) {
+		fprintf(stderr, "failed to modify QP state from RESET to RTS\n");
+		return rc;
+	}
+
+	/* only the daemon post SR, so only he should be in RTS
+	   (the client can be moved to RTS as well)
+	 */
+	if (0)
+		fprintf(stdout, "QP state was change to RTR\n");
+	else {
+		rc = modify_qp_to_rts(myqp);
+		if (rc) {
+			fprintf(stderr, "failed to modify QP state from RESET to RTS\n");
+			return rc;
+		}
+
+		fprintf(stdout, "QP state was change to RTS\n");
+	}
+
+	/* sync to make sure that both sides are in states that they can connect to prevent packet loose */
+	if (sock_sync_ready(sock, !(end==0))) {
+		fprintf(stderr, "sync after QPs are were moved to RTS\n");
+		return 1;
+	}
 
 	return 0;
 }
 
 
-
-
-int on_connect_request(struct rdma_cm_id *id, int tid)
-{
-	struct rdma_conn_param cm_params;
-	if(!tid) printf("received connection request.\n");
-	build_connection(id, tid);
-	conn_id[tid] = id;
-	build_params(&cm_params);
-	TEST_NZ(rdma_accept(id, &cm_params));
-	return 0;
-}
-
-int on_addr_resolved(struct rdma_cm_id *rid, int tid)
-{
-	if(!tid) printf("address resolved.\n");
-	build_connection(rid, tid);
-	conn_id[tid] = rid;
-	TEST_NZ(rdma_resolve_route(rid, TIMEOUT_IN_MS));
-	return 0;
-}
-
-int on_route_resolved(struct rdma_cm_id *id, int tid)
-{
-	struct rdma_conn_param cm_params;
-	if(!tid) printf("route resolved.\n");
-	build_params(&cm_params);
-	TEST_NZ(rdma_connect(id, &cm_params));
-	
-	if(!tid) printf("route resolved ok.\n");
-	return 0;
-}
-
-int on_connection(struct rdma_cm_id *id, int tid)
-{	
-	return 1;
-}
-
-void build_connection(struct rdma_cm_id *id, int tid)
+void build_connection(int tid)
 {
 	struct ibv_qp_init_attr *qp_attr;
 	qp_attr = ( struct ibv_qp_init_attr* )malloc( sizeof( struct ibv_qp_init_attr ) );
 	if( !tid ){
-	  build_context(id->verbs);
+	  build_context(s_ctx->ctx);
+	  register_memory( end );
 	  qpmgt->data_num = connect_number-ctrl_number;
 	  qpmgt->ctrl_num = ctrl_number;
 	  //sth need to init for 1st time
@@ -229,8 +398,9 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	
 	qp_attr->sq_sig_all = 1;
 	
-	TEST_NZ(rdma_create_qp(id, s_ctx->pd, qp_attr));
-	qpmgt->qp[tid] = id->qp;
+	struct ibv_qp *myqp = ibv_create_qp( s_ctx->pd, qp_attr );
+	qpmgt->qp[tid] = myqp;
+	connect_qp( myqp, tid );
 	
 	// struct ibv_qp_attr tmp[1];
 	// enum ibv_qp_attr_mask mask;
@@ -240,21 +410,10 @@ void build_connection(struct rdma_cm_id *id, int tid)
 	// //printf("%d init rnr %d retry %d\n", tid, init->rnr_retry, init->retry_cnt);
 	// printf("%d tmp rnr %d retry %d %d %d %d\n", tid, (int)tmp->rnr_retry, (int)tmp->retry_cnt, (int)tmp->dest_qp_num, (int)tmp->qkey, (int)tmp->port_num);
 	// //cout << tmp->rnr_retry << "  " << tmp->retry_cnt << endl;
-	
-	if( !tid )
-		register_memory( end );
 }
 
 void build_context(struct ibv_context *verbs)
 {
-	if (s_ctx) {
-	  if (s_ctx->ctx != verbs)
-		die("cannot handle events in more than one context.");
-	  return;
-	}
-	s_ctx = ( struct connection * )malloc( sizeof( struct connection ) );
-	
-	s_ctx->ctx = verbs;
 
 	TEST_Z(s_ctx->pd = ibv_alloc_pd(s_ctx->ctx));
 	TEST_Z(s_ctx->comp_channel = ibv_create_comp_channel(s_ctx->ctx));
@@ -388,13 +547,7 @@ int get_wc( struct ibv_wc *wc )
 int destroy_qp_management()
 {
 	for( int i = 0; i < connect_number; i ++ ){
-		//printf("waiting %02d\n", i);
-		rdma_disconnect(conn_id[i]);
-		//fprintf(stderr, "qp: %d state %d\n", i, qp_query(i));
-		//fprintf(stderr, "qp: %d num %d\n", i, query_qp_count(qpmgt, i));
-		rdma_destroy_qp(conn_id[i]);
-		rdma_destroy_id(conn_id[i]);
-		//fprintf(stderr, "rdma #%02d disconnect\n", i);
+		ibv_destroy_qp( qpmgt->qp[i] );
 	}
 	free(qpmgt); qpmgt = NULL;
 	return 0;
@@ -412,7 +565,8 @@ int destroy_connection()
 	TEST_NZ(ibv_destroy_comp_channel(s_ctx->comp_channel));
 	TEST_NZ(ibv_destroy_comp_channel(s_ctx->mem_channel));
 	TEST_NZ(ibv_dealloc_pd(s_ctx->pd));
-	rdma_destroy_event_channel(ec);
+	TEST_NZ(ibv_close_device(s_ctx->ctx));
+	close(sock);
 	free(s_ctx); s_ctx = NULL;
 	return 0;
 }

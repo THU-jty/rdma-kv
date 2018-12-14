@@ -9,10 +9,10 @@ APPS    := client server
 
 all: ${APPS}
 
-client: common.o client.o
+client: common.o client.o sock.o
 	${LD} -o $@ $^ ${LDLIBS}
 
-server: common.o server.o
+server: common.o server.o sock.o
 	${LD} -o $@ $^ ${LDLIBS}
 
 test-client: test-client.o common.o client.o
