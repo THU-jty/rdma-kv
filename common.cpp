@@ -70,7 +70,7 @@ int resources_create(char *ip_address)
 	int 			mr_flags = 0;
 	int 			cq_size = 0;
 	int 			num_devices;
-	char *dev_name = "mlx5_0";
+	char *dev_name = "mlx5_1";
 	
 	/* if client side */
 	if ( end == 0 ) {

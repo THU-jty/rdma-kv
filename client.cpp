@@ -350,6 +350,8 @@ redo:
 	cout << "query ok" << endl;
 	p = memgt->recv_buffer;
 	memcpy( &len, p, sizeof(int) ); p += sizeof(int);
+	printf("%d result(s)\n", len);
+	//cout << len << endl;
 	for( i = 0; i < len; i ++ ){
 		int x = (*(int*)p); p += sizeof(int);
 		int y = (*(int*)p); p += sizeof(int);
@@ -357,6 +359,7 @@ redo:
 		for( j = 0; j < y; j ++ ){
 			s.push_back( p[j] );
 		}
+		p += y;
 		cout << "key: " << x << " value: " << s << endl;
 	}
 }
